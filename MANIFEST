@@ -1,0 +1,12 @@
+Changes
+ignore.txt
+lib/AnyEvent/Redis2.pm
+lib/AnyEvent/Redis2/Protocol.pm
+lib/AnyEvent/Redis2/Subscriber.pm
+Makefile.PL
+MANIFEST
+README
+t/00-load.t
+t/manifest.t
+t/pod.t
+META.yml                                 Module meta-data (added by MakeMaker)
