@@ -32,9 +32,9 @@ loop.
 AnyEvent::Redis2::Subscriber is an event-driven (asynchronous) subscriber for
 the Redis publish/subscribe system.  
 
-The main idea is that other clients (such as AnyEvent::Redis2) publish messages
-to a specified channel (or class, in Redis-speak), which are then received by
-each client that has subscribed to the channel.
+The main idea is that other clients (such as L<AnyEvent::Redis2>) publish
+messages to a specified channel (or class, in Redis-speak), which are then
+received by each client that has subscribed to the channel.
 
 Unlike some other publish/subscribe mechanisms which are producer-consumer
 based, Redis' publish/subscribe mechanism is broadcast-based: every subscriber
@@ -72,7 +72,7 @@ Optional arguments include:
 
 =item port => $port
 
-Connect to the Redis server at L<$port>.  If undefined, the default port (6379)
+Connect to the Redis server at C<$port>.  If undefined, the default port (6379)
 is used.
 
 =item auth => $password
@@ -95,7 +95,7 @@ channel it was received on:
 =head2 Dealing with errors
 
 To be notified of errors (which can occur at connect time or thereafter), 
-register a callback as follows:
+register callback with the C<error> event as follows:
 
  $subscriber->reg_cb(error => sub {
     my ($subscriber, $errmsg) = @_;

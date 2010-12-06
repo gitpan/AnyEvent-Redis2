@@ -7,7 +7,7 @@ use Carp qw(croak);
 use AnyEvent::Handle;
 use AnyEvent::Redis2::Protocol;
 
-our $VERSION = 0.1;
+our $VERSION = 0.2;
 
 =head1 NAME
 
@@ -37,7 +37,7 @@ loop.
 AnyEvent::Redis2 is an event-driven (asynchronous) client for the Redis
 key-value (NoSQL) database server.  Every operation is supported, B<except>
 subscription to Redis "classes" (i.e. channels), which is supported by
-AnyEvent::Redis::Subscriber.  However, this module may be used to publish to
+L<AnyEvent::Redis::Subscriber>.  However, this module may be used to publish to
 channels.
 
 =head2 Establishing a connection
@@ -190,6 +190,27 @@ sub AUTOLOAD {
 sub DESTROY {
     # Don't delete this, or AUTOLOAD will be invoked on DESTROY.
 }
+
+=head1 WHY NOT AnyEvent::Redis?
+
+AnyEvent::Redis2 began as a clean-room implementation of a Redis module for
+AnyEvent.  Instead of abandoning it, I decided to upload it.  
+
+The substantive differences from AnyEvent::Redis are minimal:
+
+=over
+
+=item Cleaner, simpler API
+
+=item Better documentation (IMHO)
+
+=item Explicit separation of subscriber functionality (into
+AnyEvent::Redis2::Subscriber) 
+
+=item Simpler, faster protocol parser (note the number of serious parser bugs
+previously reported in AnyEvent::Redis)
+
+=back
 
 =head1 SEE ALSO
 

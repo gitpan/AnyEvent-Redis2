@@ -48,8 +48,7 @@ sub anyevent_read_type {
                         });
                     }
                 }
-            }
-            if ($line =~ /^[\+:](.*)/) {
+            } elsif ($line =~ /^[\+:](.*)/) {
                 # Single line/integer reply
                 $cb->($handle, undef, $1);
             } elsif ($line =~ /^-(.*)/) {
@@ -66,7 +65,7 @@ sub anyevent_read_type {
                     $handle->unshift_read(chunk => $length + 2, sub {
                         use bytes;
                         my $data = $_[1];
-                        $cb->($handle, undef, substr($data, 0, length($data) - 2));
+                        $cb->($handle, undef, substr($data, 0, $length));
                     });
                 }
             }
