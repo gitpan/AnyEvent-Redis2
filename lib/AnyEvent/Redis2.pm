@@ -7,7 +7,7 @@ use Carp qw(croak);
 use AnyEvent::Handle;
 use AnyEvent::Redis2::Protocol;
 
-our $VERSION = 0.2;
+our $VERSION = 0.3;
 
 =head1 NAME
 
@@ -61,23 +61,28 @@ the default port will be used.)
 
 Authenticate to the server with the given password.
 
-=item on_connect => $cb->($conn, $host, $port)
+=item on_connect => $cb->($host, $port)
 
-Specifies a callback to be executed upon a successful connection.  The
-connection object and the actual peer host and port number will be passed as
-arguments to the callback.
+Specifies a callback to be executed upon a successful connection.  The actual
+peer host and port number will be passed as arguments to the callback.
 
-=item on_connect_error => $cb->($conn, $errmsg)
+=item on_connect_error => $cb->($errmsg)
 
 Specifies a callback to be executed if the connection failed (or authentication
-failed).  The connection object and the error message will be passed as
-arguments to the callback.  The connection is not reusable.
+failed).  The error message will be passed to the callback. 
 
-=item on_error => $cb->($conn, $errmsg)
+The callback may return an interval value (as a fractional number); if
+specified, the client will automatically attempt to reconnect at that interval
+until successful.
+
+=item on_error => $cb->($errmsg)
 
 Specifies a callback to be executed if an I/O error occurs (e.g. connection
-reset by peer).  The connection object and the error message will be passed as
-arguments to the callback.  The connection is not reusable.
+reset by peer).  The error message will be passed to the callback.
+
+The callback may return an interval value (as a fractional number); if
+specified, the client will automatically attempt to reconnect at that interval
+until successful.
 
 =back
 
@@ -92,6 +97,12 @@ sub connect {
     my $self = { %args };
     bless $self, $class;
 
+    $self->_connect;
+    return $self;
+}
+
+sub _connect {
+    my $self = shift;
     $self->{handle} = AnyEvent::Handle->new(
         connect => [ $self->{host}, $self->{port} ],
         keepalive  => 1,
@@ -104,30 +115,41 @@ sub connect {
                 $self->{handle}->push_read('AnyEvent::Redis2::Protocol' => sub {
                         my ($handle, $ok) = @_;
                         if ($ok) {
-                            $self->{on_connect}->($self, $host, $port) 
+                            $self->{on_connect}->($host, $port) 
                                 if $self->{on_connect};
                         } else {
                             $self->{handle}->destroy;
-                            $self->{on_connect_error}->($self, $_[2])
+                            $self->{on_connect_error}->($_[2])
                                 if $self->{on_connect_error};
                         }
                 });
             } else {
-                $self->{on_connect}->($self, $host, $port) 
+                $self->{on_connect}->($host, $port) 
                     if $self->{on_connect};
             }
         },
         on_connect_error => sub { 
-            $self->{on_connect_error}->($self, $_[1]) 
-                if $self->{on_connect_error};
+            if ($self->{on_connect_error}) {
+                if (defined(my $interval = $self->{on_connect_error}->($_[1]))) {
+                    my $t; $t = AE::timer($interval, 0, sub {
+                            $self->_connect;
+                            undef $t;
+                    });
+                }
+            }
         },
         on_error   => sub { 
             $self->{handle}->destroy; 
-            $self->{on_error}->($self, $_[2]) if $self->{on_error};
+            if ($self->{on_error}) {
+                if (defined(my $interval = $self->{on_error}->($_[2]))) {
+                    my $t; $t = AE::timer($interval, 0, sub {
+                            $self->_connect;
+                            undef $t;
+                    });
+                }
+            }
         }, 
     );
-
-    return $self;
 }
 
 =head2 Queries and responses
@@ -138,44 +160,63 @@ handler fired by connect(), above.)
 
 To issue a query, use the query() method:
 
-  $redis->query(@args, $cb->($errmsg, @data)));
+  $cv = $redis->query(@args, [ $cb->($data, $error) ]);
 
 The initial list of arguments to query() comprise the actual command.
 (See the command reference
 L<http://code.google.com/p/redis/wiki/CommandReference> for a list of available
 commands.)
 
-The final argument to query() specifies a callback (code reference) that will
-be fired when a response to the query is received.  It will be called with the
-error message (which will be C<undef> if there was no error) as the first
-argument; the remaining arguments will be the values (if any) that comprise the
-response.  
+The final argument to query() specifies a optional callback (code reference)
+that will be fired when a response to the query is received.  It will be called
+with the data (either a scalar, or an ARRAY reference for a multi-bulk
+response) as the first argument, and a scalar indicating whether the data is an
+error message as the second argument.
+
+query() will return an L<AnyEvent> condition variable that can also be used to
+retrieve the results via its recv() method (or via cb() if you don't want to
+block).  If an error occurs, recv() will die, so be sure to wrap it in an
+C<eval>:
+
+  my $cv = $redis->query(@args);
+  eval { 
+      my $result = $cv->recv; 
+      # ...
+  };
+  if ($@) {
+      warn "server error: $@";
+      ...
+  }
 
 =cut
 
 sub query {
     my ($self, @args) = @_;
 
-    my $cb = pop @args;
-    ref($cb) eq 'CODE' or croak 'Missing callback';
+    my $cb; $cb = pop @args if ref($_[-1]) eq 'CODE';
     scalar @args or croak "Missing args";
 
     $args[0] !~ /^P?(?:UN)?SUBSCRIBE/ 
         or croak 'Subscriptions not supported; use AnyEvent::Redis2::Subscriber instead';
 
+    my $cv = AnyEvent->condvar;
     $self->{handle}->push_write('AnyEvent::Redis2::Protocol', @args);
     $self->{handle}->push_read('AnyEvent::Redis2::Protocol' => sub {
-        my ($handle, $errmsg, @values) = @_;
-        $cb->($errmsg, @values);
+            $cb->(@_) if $cb;
+            # croak if error occurred; otherwise send data
+            $_[1] ? $cv->croak($_[0]) : $cv->send($_[0]);
+            1;
     });
+    return $cv;
 }
 
 =pod
 
 Alternatively, you may invoke Redis commands as methods, e.g.: 
 
- $redis->set(key1 => $val1, sub { ... });
- $redis->get(key1 => sub { ... });
+ $cv = $redis->set(key1 => $val1, [ $cb->($result, $error) ]);
+ $cv = $redis->lrange('list', 0, 1000, [ $cb->($result, $error) ]);
+ $cv = $redis->get(key1, [ $cb->($result, $error) ]);
 
 =cut
 
@@ -193,22 +234,28 @@ sub DESTROY {
 
 =head1 WHY NOT AnyEvent::Redis?
 
-AnyEvent::Redis2 began as a clean-room implementation of a Redis module for
-AnyEvent.  Instead of abandoning it, I decided to upload it.  
+AnyEvent::Redis2 began as a from-scratch implementation of a Redis module for
+AnyEvent.  (When I began writing it, I didn't know such a module already
+existed.)  Instead of abandoning it when I realized my oversight, I decided to
+contribute it. 
 
-The substantive differences from AnyEvent::Redis are minimal:
+The substantive differences from AnyEvent::Redis are:
 
 =over
 
-=item Cleaner, simpler API
+=item Better documentation
 
-=item Better documentation (IMHO)
+=item Automatic reconnection capability
+
+=item on_connect() callback 
+
+=item Simpler, faster protocol parser (about 30% faster sending large numbers
+of queries; about 10% faster receiving bulk responses)
+
+=item Easier-to-read code
 
 =item Explicit separation of subscriber functionality (into
 AnyEvent::Redis2::Subscriber) 
-
-=item Simpler, faster protocol parser (note the number of serious parser bugs
-previously reported in AnyEvent::Redis)
 
 =back
 

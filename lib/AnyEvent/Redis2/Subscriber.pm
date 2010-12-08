@@ -88,17 +88,26 @@ message is received, the callback will be fired with the message and the
 channel it was received on:
 
  $subscriber->reg_cb(message => sub {
-     my ($subscriber, $channel, $message) = @_;
+     my ($channel, $message) = @_;
      print "Received message $message on channel $channel";
+ });
+
+If you've subscribed to a channel pattern, you may also register a callback for
+the C<pmessage> event.  When a message is received, the callback will be fired
+with the message, the channel it was received on, and the pattern:
+
+ $subscriber->reg_cb(pmessage => sub {
+     my ($pattern, $channel, $message) = @_;
+     print "Received message $message on channel $channel (pattern $pattern)";
  });
 
 =head2 Dealing with errors
 
 To be notified of errors (which can occur at connect time or thereafter), 
-register callback with the C<error> event as follows:
+register a callback with the C<error> event as follows:
 
  $subscriber->reg_cb(error => sub {
-    my ($subscriber, $errmsg) = @_;
+    my ($errmsg) = @_;
     # ...
  });
 
@@ -107,8 +116,9 @@ B<WARNING:> As with all AnyEvent modules, B<you must not die() in a callback!>
 =head2 Unsubscribing
 
 To unsubscribe, just undef the subscriber handle.  Reusing handles for
-subsequent subscriptions is not supported.  Even though the wire protocol
-technically supports it, trust me, it's better this way :-).
+subsequent subscriptions (i.e., changing the channel) is not supported.  Even
+though the wire protocol technically supports it, trust me, it's better this
+way :-).
 
 =cut
 
@@ -167,25 +177,33 @@ sub _subscribe {
                                     SUBSCRIBE => $self->{channel});
     }
     $self->{handle}->push_read('AnyEvent::Redis2::Protocol' => sub {
-            my ($handle, $errmsg, @values) = @_;
-            if ($errmsg) { 
-                $self->event('error', $errmsg);
+            my ($result, $error) = @_;
+            if ($error) { 
+                $self->event('error', $result);
             } else {
-                if (($self->{channel} && $values[0] eq 'subscribe' && $values[1] eq $self->{channel})
-                    || ($self->{pattern} && $values[0] eq 'psubscribe' && $values[1] eq $self->{pattern})) {
+                if (($self->{channel} && $result->[0] eq 'subscribe' && $result->[1] eq $self->{channel})
+                    || ($self->{pattern} && $result->[0] eq 'psubscribe' && $result->[1] eq $self->{pattern})) {
                     $self->{handle}->on_read(sub {
                             $self->{handle}->push_read('AnyEvent::Redis2::Protocol' => sub {
-                                    if ($_[2] eq 'message') {
-                                        $self->event('message', $_[3], $_[4]);
-                                    } elsif ($_[2] eq 'pmessage') {
-                                        $self->event('message', $_[4], $_[5]);
+                                    my ($result, $error) = @_;
+                                    if ($error) {
+                                        $self->event('error', $result);
+                                    } else {
+                                        if ($result->[0] eq 'message') {
+                                            $self->event('message', $result->[1], $result->[2]);
+                                        } elsif ($result->[0] eq 'pmessage') {
+                                            $self->event('message', $result->[2], $result->[3]);
+                                            $self->event('pmessage', $result->[1], $result->[2], $result->[3]);
+                                        }
                                     }
+                                    1;
                             });
                     });
                 } else {
                     $self->event('error', 'Unexpected response to [P]SUBSCRIBE command');
                 }
             }
+            1;
     });
 }
 

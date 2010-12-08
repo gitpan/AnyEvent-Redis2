@@ -30,47 +30,93 @@ sub anyevent_write_type {
 sub anyevent_read_type {
     my ($handle, $cb) = @_;
     return sub {
+        use bytes;
         $handle->push_read(line => sub {
             my $line = $_[1];
-            if ($line =~ /^\*(-?\d+)/) {
-                my $nexpected = $1;
-                if ($nexpected == -1) {
-                    $cb->($handle, undef, undef);
+            my $type = substr($line, 0, 1);
+            my $value = substr($line, 1);
+            if ($type eq '*') {
+                # Multi-bulk reply 
+                my $remaining = $value;
+                if ($remaining == 0) {
+                    $cb->([]);
+                } elsif ($remaining == -1) {
+                    $cb->(undef);
                 } else {
-                    my $values = [];
-                    for (my $i = 0; $i < $nexpected; $i++) {
-                        $handle->push_read('AnyEvent::Redis2::Protocol' => sub {
-                                my ($handle, $errmsg, $value) = @_;
-                                push @$values, $value;
-                                if (scalar @$values == $nexpected) {
-                                    $cb->($handle, undef, @$values);
+                    my $results = [];
+                    $handle->push_read(sub {
+                        my $need_more_data = 0;
+                        do {
+                            if ($handle->{rbuf} =~ /^(\$(-?\d+)\015\012)/) {
+                                my ($match, $vallen) = ($1, $2);
+                                if ($vallen == -1) {
+                                    # Delete the bulk header.
+                                    substr($handle->{rbuf}, 0, length($match), '');
+                                    push @$results, undef;
+                                    $remaining--;
+                                    unless ($remaining) {
+                                        $cb->($results);
+                                        return 1;
+                                    }
+                                } elsif (length $handle->{rbuf} >= (length($match) + $vallen + 2)) {
+                                    # OK, we have enough in our buffer.
+                                    # Delete the bulk header.
+                                    substr($handle->{rbuf}, 0, length($match), '');
+                                    push @$results, substr($handle->{rbuf}, 0, $vallen, '');
+                                    $remaining--;
+                                    # Delete trailing data characters.
+                                    substr($handle->{rbuf}, 0, 2, '');
+                                    unless ($remaining) {
+                                        $cb->($results);
+                                        return 1;
+                                    }
+                                } else {
+                                    $need_more_data = 1;
                                 }
-                        });
-                    }
+                            } elsif ($handle->{rbuf} =~ s/^([\+\-:])([^\015\012]*)\015\012//) {
+                                my ($type, $value) = ($1, $2);
+                                if ($type eq '+' || $type eq ':') {
+                                    push @$results, $value;
+                                    $remaining--;
+                                    unless ($remaining) {
+                                        $cb->($results);
+                                        return 1;
+                                    }
+                                } elsif ($type eq '-') {
+                                    # Error - abort early
+                                    $cb->($value, 1);
+                                    return 1;
+                                }
+                            } else {
+                                # Nothing matched - read more...
+                                $need_more_data = 1;
+                            }
+                        } until $need_more_data;
+                        return undef; # get more data
+                    });
                 }
-            } elsif ($line =~ /^[\+:](.*)/) {
+            } elsif ($type eq '+' || $type eq ':') {
                 # Single line/integer reply
-                $cb->($handle, undef, $1);
-            } elsif ($line =~ /^-(.*)/) {
+                $cb->($value);
+            } elsif ($type eq '-') {
                 # Single-line error reply
-                $cb->($handle, $1);
-            } elsif ($line =~ /^\$(-?\d+)/) {
+                $cb->($value, 1);
+            } elsif ($type eq '$') {
                 # Bulk reply
-                my $length = $1;
-                if ($length == -1) {
-                    $cb->($handle, undef, undef);
+                if ($value == -1) {
+                    $cb->(undef);
                 } else {
                     # We need to read 2 bytes more than the length (stupid 
                     # CRLF framing).  Then we need to discard them.
-                    $handle->unshift_read(chunk => $length + 2, sub {
-                        use bytes;
+                    $handle->unshift_read(chunk => $value + 2, sub {
                         my $data = $_[1];
-                        $cb->($handle, undef, substr($data, 0, $length));
+                        $cb->(substr($data, 0, $value));
                     });
                 }
             }
+            return 1;
         });
-        1;
+        return 1;
     };
 }
 

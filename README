@@ -6,17 +6,18 @@ are available.
 
 WHY THIS MODULE?
 
-AnyEvent::Redis2 began as a clean-room implementation of a Redis module for
-AnyEvent.  Instead of abandoning it, I decided to upload it.  
+AnyEvent::Redis2 began as a from-scratch implementation of a Redis module for
+AnyEvent.  (When I began writing it, I didn't know such a module already
+existed.)  Instead of abandoning it when I realized my oversight, I decided to
+contribute it. 
 
-The substantive differences from AnyEvent::Redis are minimal:
+The substantive differences from AnyEvent::Redis are:
 
-- Cleaner, simpler API
-- Better documentation (IMHO)
-- Explicit separation of subscriber functionality (into
-  AnyEvent::Redis2::Subscriber) 
-- Simpler, faster protocol parser (note the large number of parser bugs
-  previously reported in AnyEvent::Redis)
+- Better documentation
+- on_connect() callback 
+- Simpler, faster protocol parser (about 30% faster sending large numbers of
+  queries, about 10% faster receiving bulk responses)
+- Easier-to-read code
 
 INSTALLATION
 
